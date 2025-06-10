@@ -25,6 +25,17 @@ def get_by_id(id: UUID, session: Session) -> Dataset:
         raise DatasetNotFoundException(id=id)
     return dataset
 
+from typing import Optional, Tuple
+
+def get_dataset_metadata_by_repo_name(repo_name: str, session: Session) -> Optional[Tuple[str, str, int]]:
+    statement = (
+        select(Dataset.repository_name, Dataset.rdf_dataset_url, Dataset.polling_interval)
+        .where(Dataset.repository_name == repo_name)
+        .where(Dataset.active)
+    )
+    result = session.exec(statement).first()
+    return result 
+
 def add(dataset: DatasetCreate, session: Session) -> List[Dataset]:
     db_dataset = Dataset.model_validate(dataset)
 

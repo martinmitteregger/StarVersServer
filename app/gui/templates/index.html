@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Starvers: Time-traveling SPARQL Interface</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.58.3/codemirror.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.58.3/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.58.3/mode/sparql/sparql.min.js"></script>
+</head>
+<body>
+<section class="section">
+    <div class="container">
+        <h1 class="title">Starvers</h1>
+        <h2 class="subtitle">View Knowledge Graphs and Ontologies as they existed at specific points in time</h2>
+
+        <form id="sparql-form">
+            <div class="field">
+                <h3 class="title is-5">Knowledge Graph or Ontology</h3>
+                <div class="control">
+                    <div class="select">
+                        <select name="repo" id="repo-select">
+                            {% for label, value in repo_options.items() %}
+                                <option value="{{ label }}" {% if selected_repo == label %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                {% if rdf_dataset_url and polling_interval %}
+                    <div id="tracking-info" class="content mt-2">
+                        <p><strong>Tracked URL:</strong> {{ rdf_dataset_url }}</p>
+                        <p><strong>Polling Interval:</strong> {{ polling_interval }} seconds</p>
+                    </div>
+                {% endif %}
+            </div>
+
+            <div id="plot-container" class="is-flex is-flex-wrap-wrap">
+                {% if delta_plot or total_plot %}
+                    <div id="delta-plot" class="plot-box">
+                        {{ delta_plot | safe }}
+                    </div>
+                    <div id="total-plot" class="plot-box">
+                        {{ total_plot | safe }}
+                    </div>
+                {% endif %}
+            </div>
+            
+            <h3 class="title is-5">SPARQL Query</h3>
+            
+            <label id="timestamp_label" class="label">Timestamp (ISO 8601)</label>
+
+            <div class="field is-horizontal is-align-items-center">
+                <div class="field-body is-flex is-align-items-center">
+                    <div class="control">
+                        <input id="timestamp_input" class="input" type="text" name="timestamp" placeholder="e.g. 2025-05-20T12:00:00"
+                            value="{{ selected_timestamp or '2025-05-20T12:00:00' }}">
+                    </div>
+                    {% if ts_start and ts_end %}
+                        <p class="has-text-grey ml-3">Select one between {{ ts_start }} and {{ ts_end }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="field is-vertical">
+                <div class="field is-flex is-flex-wrap-wrap" style="gap: 1rem;">
+
+                    <!-- SPARQL editor -->
+                    <div class="control" style="flex: 1; min-width: 300px; display: flex; flex-direction: column;">
+                        <div class="is-flex is-justify-content-flex-end">
+                            <label class="label">Execution Time: <span id="timer">0</span> sec</label>
+                        </div>
+                        <textarea id="sparql-editor" class="textarea" name="sparql" rows="10">{{ selected_query or 'select ?s ?p ?o ?p2 ?o2 {\n ?s ?p ?o .\n ?o ?p2 ?o2 .\n} \nlimit 10' }}</textarea>
+                    </div>
+
+                    <!-- Timestamped query with label -->
+                    <div class="control" style="flex: 1; min-width: 300px; display: flex; flex-direction: column;">
+                        <div class="is-flex is-justify-content-flex-end">
+                            <label class="label">Timestamped Query</label>
+                        </div>
+                        <div id="timestamped-editor" style="flex-grow: 1; min-height: 300px;"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="field">
+                <div class="control">
+                    <button type="submit" class="button is-link">Execute Query</button>
+                </div>
+            </div>
+        </form>
+
+        {% if error %}
+            <div class="notification is-danger mt-4">
+                <strong>Error:</strong> {{ error }}
+            </div>
+        {% endif %}
+
+        <div class="mt-5">
+            <h3 class="title is-5">Query Result</h3>
+            <div id="result-container">
+                <div id="loading-overlay">
+                    <span>Executing query... </span>
+                </div>
+           
+                <div id="result-table">
+                    {% if result %}
+                        {{ result|safe }}
+                    {% endif %}
+                </div>
+            </div>
+            {% if result %}
+                <a href="{{ url_for('routes.download') }}">
+                    <button class="button is-success mt-3">Download CSV</button>
+                </a>
+            {% endif %}
+        </div>
+    </div>
+</section>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const dropdown = document.getElementById("repo-select");
+    const plotContainer = document.getElementById("plot-container");
+    const trackingInfo = document.getElementById("tracking-info");
+    const sparqlForm = document.getElementById("sparql-form");
+    const overlay = document.getElementById("loading-overlay");
+    const timerEl = document.getElementById("timer");
+
+    let timerInterval;
+
+    dropdown.addEventListener("change", function () {
+        const selectedRepo = dropdown.value;
+        const downloadButton = document.getElementById("download-btn");
+
+        // Remove download button if it exists
+        if (downloadButton) downloadButton.parentElement.removeChild(downloadButton);
+
+        fetch(`/infos/${selectedRepo}`)
+            .then(response => {
+                if (!response.ok) throw new Error("Failed to load data");
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                    plotContainer.innerHTML = `<p class='has-text-danger'>${data.error}</p>`;
+                    trackingInfo.innerHTML = "";
+                } else {
+                    plotContainer.innerHTML = `
+                        <div id="delta-plot" class="plot-box">${data.delta_plot_html}</div>
+                        <div id="total-plot" class="plot-box">${data.total_plot_html}</div>
+                    `;
+                    trackingInfo.innerHTML = `
+                        <p><strong>Tracked URL:</strong> <span id="tracked-url">${data.rdf_dataset_url}</span></p>
+                        <p><strong>Polling Interval:</strong> <span id="polling-interval">${data.polling_interval}</span> seconds</p>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error("Error fetching plot/tracking info:", error);
+                plotContainer.innerHTML = "<p class='has-text-danger'>Failed to load plot.</p>";
+                trackingInfo.innerHTML = "<p class='has-text-danger'>Failed to load tracking info.</p>";
+            });
+    
+        // Optional: clear previous query results on repo change
+        document.getElementById("result-table").innerHTML = "";
+    });
+
+    sparqlForm.addEventListener("submit", function (e) {
+        e.preventDefault(); 
+        
+        const downloadButton = document.getElementById("download-btn");
+        const formData = new FormData(sparqlForm);
+
+        let seconds = 0;
+        timerEl.textContent = "0";
+
+        // Remove old download button if it exists
+        if (downloadButton) downloadButton.parentElement.removeChild(downloadButton);
+
+        // Show loading overlay and start timer
+        overlay.style.display = "flex";
+        timerInterval = setInterval(() => {
+            seconds += 1;
+            timerEl.textContent = seconds;
+        }, 1000);
+
+        fetch("/query", {
+            method: "POST",
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            clearInterval(timerInterval);
+            overlay.style.display = "none";
+
+            const resultTable = document.getElementById("result-table");
+            if (data.error) {
+                resultTable.innerHTML = `<div class="notification is-danger"><strong>Error:</strong> ${data.error}</div>`;
+            } else {
+                resultTable.innerHTML = data.html;
+
+                timestampedEditor.setValue(data.timestamped_query || "");
+
+
+                // Check if the download button already exists
+                if (!downloadButton) {
+                    const downloadLink = document.createElement("a");
+                    downloadLink.href = "/download";
+                    downloadLink.innerHTML = `<button id="download-btn" class="button is-success mt-3">Download CSV</button>`;
+                    resultTable.parentElement.appendChild(downloadLink);
+                }
+            }
+        })
+        .catch(err => {
+            clearInterval(timerInterval);
+            overlay.style.display = "none";
+
+            console.error("Query execution failed:", err);
+            document.getElementById("result-table").innerHTML =
+                `<div class="notification is-danger"><strong>Error:</strong> Failed to execute query.</div>`;
+        });
+    });
+});
+</script>
+
+<script>
+    const editor = CodeMirror.fromTextArea(document.getElementById('sparql-editor'), {
+        mode: 'sparql',
+        lineNumbers: true
+    });
+
+    const timestampedEditor = CodeMirror(document.getElementById("timestamped-editor"), {
+        value: "",
+        mode: "sparql",
+        lineNumbers: true,
+        theme: "default",
+        readOnly: true  
+    });
+</script>
+
+</body>
+</html>
