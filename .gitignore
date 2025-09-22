@@ -1,3 +1,11 @@
+# ngnix
+nginx/
+
+# vscode
+.devcontainer
+
+.StarVersServer.code-workspace
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -133,6 +141,6 @@ docker/graphdb-data/
 .vscode/**
 
 .DS_Store
-evaluation/
 
 archive/
+StarVersServer.code-workspace

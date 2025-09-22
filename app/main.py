@@ -6,27 +6,29 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.Database import Session, engine, create_db_and_tables
+from app.persistance.Database import Session, engine, create_db_and_tables
 
 from app.LoggingConfig import get_logger, setup_logging
 from app.api import ManagementRestService, MockRestService, QueryRestService
 from app.models.DeltaEventModel import DeltaEvent
 from app.services.ManagementService import restart
-from app.utils.exceptions.DatasetNotFoundException import DatasetNotFoundException
+from app.exceptions.DatasetNotFoundException import DatasetNotFoundException
 import uvicorn
 
-from app.utils.exceptions.RepositoryCreationFailedException import GraphRepositoryCreationFailedException
-from app.utils.exceptions.ServerFileImportFailedException import ServerFileImportFailedException
+from app.exceptions.RepositoryCreationFailedException import GraphRepositoryCreationFailedException
+from app.exceptions.ServerFileImportFailedException import ServerFileImportFailedException
 
 LOG = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    LOG.info("Setting up logging...")
+    setup_logging()
+
     LOG.info("Creating database tables...")
     create_db_and_tables()
 
-    LOG.info("Setting up logging...")
-    setup_logging()
+    LOG.info("Starting mocking service")
     MockRestService.tl.start()
 
     with Session(engine) as session:
@@ -95,5 +97,6 @@ def delta_event_notification(body: DeltaEvent):
     every time a delta was calculated. The request payload contains relevant data to be able to query the corresponding rdf dataset.
     """
 
+# for manual start via python main.py
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
